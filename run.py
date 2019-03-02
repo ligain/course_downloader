@@ -13,6 +13,7 @@ import aiohttp
 
 async def get_page_content(session: aiohttp.ClientSession, url: str,
                            retries=10, retry_timeout=2, logger=None) -> bytes:
+    logger.info(f'Start fetching url: {url}')
     page_content = b''
     if not logger:
         logger = logging
@@ -20,7 +21,6 @@ async def get_page_content(session: aiohttp.ClientSession, url: str,
     while retries > 0:
         try:
             response = await session.get(url)
-
         except asyncio.CancelledError:
             logger.error(f'Fetching url: {url} was canceled')
         except:
@@ -68,8 +68,22 @@ def get_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def downloader(args: argparse.Namespace, download_queue, logger=None):
-    pass
+def save_file(content: bytes, output_filepath: str):
+    with open(output_filepath, 'wb') as output_file:
+        output_file.write(content)
+
+
+async def download_video(session: aiohttp.ClientSession, url:str, output_filepath: str, logger=None):
+    try:
+        content = await asyncio.wait_for(
+            get_page_content(session, url, logger=logger),
+            timeout=3600
+        )
+    except asyncio.TimeoutError:
+        logger.error('Error on fetching course page: {course_url}')
+        return
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, save_file, content, output_filepath)
 
 
 async def crawler(args: argparse.Namespace, download_queue, logger=None, max_page_timeout=20):
@@ -92,13 +106,14 @@ async def crawler(args: argparse.Namespace, download_queue, logger=None, max_pag
     # Get name for output folder
     output_folder = course_page.select_one(PAGE_TITLE_SELECTOR).text
     output_fullpath = os.path.join(output_path, output_folder)
+    os.mkdir(output_fullpath)
 
     tasks = []
     for title, url in links_on_lessons.items():
-        tasks.append(get_page_content(session, url=url, logger=logger))
+        output_filepath = os.path.join(output_fullpath, f'{title}.mp4')
+        tasks.append(download_video(session, url=url, output_filepath=output_filepath, logger=logger))
 
-    done, pending = await asyncio.wait(tasks)
-
+    await asyncio.wait(tasks)
     await session.close()
 
 
@@ -111,7 +126,5 @@ if __name__ == '__main__':
                         datefmt='%Y.%m.%d %H:%M:%S')
     logger = logging.getLogger('asyncio')
     asyncio.run(
-        asyncio.gather(
-            crawler(args=args, download_queue=download_queue, logger=logger)
-        )
+        crawler(args=args, download_queue=download_queue, logger=logger)
     )
