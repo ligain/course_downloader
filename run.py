@@ -3,6 +3,7 @@
 
 import asyncio
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import logging
 from http import HTTPStatus
 
@@ -12,7 +13,7 @@ import aiohttp
 
 
 async def get_page_content(session: aiohttp.ClientSession, url: str,
-                           retries=10, retry_timeout=2, logger=None) -> bytes:
+                           retries=20, retry_timeout=2, logger=None) -> bytes:
     logger.info(f'Start fetching url: {url}')
     page_content = b''
     if not logger:
@@ -80,13 +81,16 @@ async def download_video(session: aiohttp.ClientSession, url:str, output_filepat
             timeout=3600
         )
     except asyncio.TimeoutError:
-        logger.error('Error on fetching course page: {course_url}')
+        logger.error(f'Error on fetching course page: {url}')
         return
+
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, save_file, content, output_filepath)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        await loop.run_in_executor(
+            pool, save_file, content, output_filepath)
 
 
-async def crawler(args: argparse.Namespace, download_queue, logger=None, max_page_timeout=20):
+async def crawler(args: argparse.Namespace, logger=None, max_page_timeout=20):
     course_url = args.course_url
     output_path = args.output_folder
     PAGE_TITLE_SELECTOR = 'header div.original-name'
@@ -110,7 +114,8 @@ async def crawler(args: argparse.Namespace, download_queue, logger=None, max_pag
 
     tasks = []
     for title, url in links_on_lessons.items():
-        output_filepath = os.path.join(output_fullpath, f'{title}.mp4')
+        cleaned_title = title.replace('/', '')
+        output_filepath = os.path.join(output_fullpath, f'{cleaned_title}.mp4')
         tasks.append(download_video(session, url=url, output_filepath=output_filepath, logger=logger))
 
     await asyncio.wait(tasks)
@@ -119,12 +124,11 @@ async def crawler(args: argparse.Namespace, download_queue, logger=None, max_pag
 
 if __name__ == '__main__':
     args = get_args()
-    download_queue = asyncio.Queue(5)
 
     logging.basicConfig(level=logging.INFO,
                         format='[%(asctime)s] %(funcName)s: %(levelname).1s %(message)s',
                         datefmt='%Y.%m.%d %H:%M:%S')
     logger = logging.getLogger('asyncio')
     asyncio.run(
-        crawler(args=args, download_queue=download_queue, logger=logger)
+        crawler(args=args, logger=logger)
     )
